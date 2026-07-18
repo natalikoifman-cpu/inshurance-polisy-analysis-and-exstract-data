@@ -13,8 +13,14 @@ around the model. This kit gives your agents that pipeline.
 
 | Folder | What | Who uses it |
 |---|---|---|
-| [`skills/`](skills/) | 8 agent-building skills + paste-ready role packs (sales / marketing / customer service) | Anyone building an agent — just copy & paste |
-| [`connector/`](connector/) | A Power Platform **custom connector** + Azure Functions backend that runs the pipeline (intake check, routing, BM25 retrieval, grounded answers, consistency verification) | IT deploys once; every agent reuses it |
+| [`skills/`](skills/) | 12 agent-building skills + paste-ready role packs (sales / marketing / customer service) | Anyone building an agent — just copy & paste |
+| [`connector/`](connector/) | A Power Platform **custom connector** + Azure Functions backend that runs the pipeline (intake check, routing, BM25 retrieval, grounded answers, consistency verification, customer memory) | IT deploys once; every agent reuses it |
+
+Skills 1–8 implement the engineered-agent pipeline (*"Why the agent fails"*).
+Skills 9–12 add **customer memory** (*"Architecting AI Memory"*): conversations are
+distilled into clean facts behind a novelty gate, consolidated on a schedule, and
+retrieved with awareness of the customer's state — so the agent that helped a
+customer yesterday actually remembers them today.
 
 ## The 10-minute path to a working agent
 
@@ -37,3 +43,4 @@ around the model. This kit gives your agents that pipeline.
 | Answer quality | Confident guesses | **Only from the documents, with the clause referenced** |
 | Consistency | Different answer every run | **Identical — and provable via the Verify action** |
 | Cost per answer | High (sends everything) | Low (sends a focused page) |
+| Returning customer | Starts from zero every chat | **Remembered: clean facts, no re-asking, no contradictions** |

@@ -301,6 +301,171 @@
         }
       }
     },
+    "/memory/extract": {
+      "post": {
+        "operationId": "ExtractMemoryFacts",
+        "summary": "Extract memory facts",
+        "x-ms-summary": "Extract memory facts",
+        "description": "Skills 9+10: distills a conversation into clean memory facts and passes each through the surprisal gate — only genuinely new information is stored (ADD), corrections update the existing memory (UPDATE), known/expected input is rejected (NOOP). Call at the end of a conversation with an identified customer, then save the returned updated_memories in your store (Dataverse, CRM). Store facts, never transcripts.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "conversation_text": {"type": "string", "description": "The full conversation to distill", "x-ms-summary": "Conversation text"},
+                "memories": {
+                  "type": "array",
+                  "description": "The customer's existing memory facts",
+                  "x-ms-summary": "Existing memories",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {"type": "string"},
+                      "text": {"type": "string"},
+                      "state": {"type": "string", "description": "calm / frustrated / crisis / research"}
+                    }
+                  }
+                },
+                "customer_state": {"type": "string", "description": "The customer's state in this conversation: calm, frustrated, crisis or research — stored on new facts", "x-ms-summary": "Customer state"},
+                "novelty_threshold": {"type": "number", "default": 0.3, "description": "Below this novelty score a fact is rejected (NOOP). Raise for chatty bots, lower for high-stakes flows", "x-ms-summary": "Novelty threshold"},
+                "candidate_facts": {"type": "array", "items": {"type": "string"}, "description": "Optional: pre-extracted facts, skips the model step", "x-ms-summary": "Candidate facts"}
+              },
+              "required": ["memories"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Operations and the updated memory list",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "operations": {
+                  "type": "array",
+                  "x-ms-summary": "Operations",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "op": {"type": "string", "description": "ADD / UPDATE / NOOP"},
+                      "fact": {"type": "string"},
+                      "novelty": {"type": "number"},
+                      "target_id": {"type": "string"},
+                      "reason": {"type": "string"}
+                    }
+                  }
+                },
+                "updated_memories": {"type": "array", "items": {"type": "object"}, "x-ms-summary": "Updated memories"},
+                "stored": {"type": "integer", "x-ms-summary": "Facts stored"},
+                "rejected_by_gate": {"type": "integer", "x-ms-summary": "Rejected by surprisal gate"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/memory/consolidate": {
+      "post": {
+        "operationId": "ConsolidateMemories",
+        "summary": "Consolidate memories",
+        "x-ms-summary": "Consolidate memories",
+        "description": "Skill 11: the sleep daemon. Compresses a customer's episodic memories into a few stable facts, resolves contradictions (the newer fact wins), and drops noise — memory quality improves over time. Schedule nightly/weekly from a Power Automate recurrence flow over recently active customers.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "memories": {
+                  "type": "array",
+                  "description": "The customer's memory list, in chronological order (earlier first)",
+                  "x-ms-summary": "Memories",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {"type": "string"},
+                      "text": {"type": "string"},
+                      "state": {"type": "string"}
+                    }
+                  }
+                }
+              },
+              "required": ["memories"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The consolidated memory list",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "memories": {"type": "array", "items": {"type": "object"}, "x-ms-summary": "Consolidated memories"},
+                "before": {"type": "integer"},
+                "after": {"type": "integer"},
+                "compression_ratio": {"type": "number", "x-ms-summary": "Compression ratio"},
+                "removed_ids": {"type": "array", "items": {"type": "string"}}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/memory/retrieve": {
+      "post": {
+        "operationId": "RetrieveMemories",
+        "summary": "Retrieve memories",
+        "x-ms-summary": "Retrieve memories",
+        "description": "Skill 12: context-aware memory retrieval, pure deterministic code. Scores each memory by ~70% text relevance (BM25 with Hebrew-aware keyword enrichment) + ~30% match to the customer's current state (calm/frustrated/crisis/research), then related memories join through associative expansion at a decayed score. Call before answering an identified customer to personalize with the 1-2 most relevant facts.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "query": {"type": "string", "description": "The customer's question or the current topic", "x-ms-summary": "Query"},
+                "memories": {"type": "array", "items": {"type": "object"}, "description": "The customer's memory facts", "x-ms-summary": "Memories"},
+                "customer_state": {"type": "string", "description": "calm / frustrated / crisis / research — judged from the customer's wording", "x-ms-summary": "Customer state"},
+                "top_k": {"type": "integer", "default": 6, "x-ms-summary": "Top K"},
+                "synonyms": {"type": "object", "x-ms-summary": "Synonyms"}
+              },
+              "required": ["query", "memories"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The most relevant memories",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "found": {"type": "boolean", "x-ms-summary": "Anything found"},
+                "total_memories": {"type": "integer"},
+                "keywords_used": {"type": "array", "items": {"type": "string"}},
+                "memories": {
+                  "type": "array",
+                  "x-ms-summary": "Relevant memories",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "memory": {"type": "object"},
+                      "score": {"type": "number"},
+                      "via": {"type": "string", "description": "'match' or 'association with <id>'"}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/ask": {
       "post": {
         "operationId": "AskPipeline",

@@ -191,6 +191,115 @@ def check_intake(required_fields: list[dict], filled: dict[str, str]) -> dict:
 
 # --- deterministic routing --------------------------------------------------
 
+# --- memory: novelty gate, operations, context-aware retrieval ---------------
+
+def _keyword_set(text: str) -> set[str]:
+    return {strip_hebrew_prefix(t) for t in tokenize(text)
+            if t not in _STOPWORDS and len(t) >= 2}
+
+
+def novelty(fact_text: str, memories: list[dict]) -> tuple[float, int]:
+    """Surprisal gate: 1.0 = completely new, 0.0 = already known.
+    Overlap coefficient against the most similar existing memory.
+    Returns (novelty_score, index_of_most_similar_memory or -1)."""
+    fact_keys = _keyword_set(fact_text)
+    if not fact_keys:
+        return 0.0, -1
+    best_sim, best_idx = 0.0, -1
+    for i, memory in enumerate(memories):
+        mem_keys = _keyword_set(memory.get("text", ""))
+        if not mem_keys:
+            continue
+        sim = len(fact_keys & mem_keys) / min(len(fact_keys), len(mem_keys))
+        if sim > best_sim:
+            best_sim, best_idx = sim, i
+    return round(1.0 - best_sim, 4), best_idx
+
+
+def decide_operations(candidate_facts: list[str], memories: list[dict],
+                      threshold: float = 0.3) -> list[dict]:
+    """ADD / UPDATE / NOOP per candidate fact, by novelty against the store.
+    novelty < threshold -> NOOP (already known); threshold..0.7 -> UPDATE the
+    most similar memory; >= 0.7 -> ADD. DELETE happens in consolidation."""
+    operations = []
+    for fact in candidate_facts:
+        fact = str(fact or "").strip()
+        if not fact:
+            continue
+        score, similar_idx = novelty(fact, memories)
+        if score < threshold:
+            operations.append({"op": "NOOP", "fact": fact, "novelty": score,
+                               "reason": "already known / below novelty threshold"})
+        elif score < 0.7 and similar_idx >= 0:
+            operations.append({"op": "UPDATE", "fact": fact, "novelty": score,
+                               "target_id": memories[similar_idx].get("id"),
+                               "reason": "extends or corrects an existing memory"})
+        else:
+            operations.append({"op": "ADD", "fact": fact, "novelty": score,
+                               "reason": "new information"})
+    return operations
+
+
+def apply_operations(memories: list[dict], operations: list[dict],
+                     customer_state: str | None = None) -> list[dict]:
+    """Apply ADD/UPDATE (NOOP skipped) and return the updated memory list.
+    New ids continue the highest numeric m<N> suffix — deterministic."""
+    updated = [dict(m) for m in memories]
+    next_num = 1 + max((int(m["id"][1:]) for m in updated
+                        if re.fullmatch(r"m\d+", str(m.get("id", "")))), default=0)
+    by_id = {m.get("id"): m for m in updated}
+    for op in operations:
+        if op["op"] == "ADD":
+            entry = {"id": f"m{next_num}", "text": op["fact"]}
+            if customer_state:
+                entry["state"] = customer_state
+            updated.append(entry)
+            next_num += 1
+        elif op["op"] == "UPDATE" and op.get("target_id") in by_id:
+            target = by_id[op["target_id"]]
+            target["text"] = op["fact"]
+            if customer_state:
+                target["state"] = customer_state
+    return updated
+
+
+def memory_retrieve(memories: list[dict], query: str,
+                    customer_state: str | None = None, top_k: int = 6,
+                    synonyms: dict[str, list[str]] | None = None) -> dict:
+    """Context-aware retrieval: ~70% text relevance (BM25) + ~30% state match,
+    then associative expansion — memories sharing keywords with the top hits
+    join at a 20%-decayed score. Deterministic."""
+    texts = [m.get("text", "") for m in memories]
+    keywords = enrich_keywords(query, synonyms)
+    hits = BM25(texts).search(keywords, top_k=len(texts)) if texts else []
+    max_score = max((h["score"] for h in hits), default=0.0) or 1.0
+    scored: dict[int, dict] = {}
+    for hit in hits:
+        memory = memories[hit["index"]]
+        text_score = hit["score"] / max_score
+        if customer_state and memory.get("state"):
+            state_score = 1.0 if memory["state"] == customer_state else 0.0
+            blended = 0.7 * text_score + 0.3 * state_score
+        else:
+            blended = text_score
+        scored[hit["index"]] = {"memory": memory, "score": round(blended, 4),
+                                "via": "match"}
+    # associative expansion from the top 3 direct hits
+    top_direct = sorted(scored.items(), key=lambda kv: (-kv[1]["score"], kv[0]))[:3]
+    for idx, entry in top_direct:
+        anchor_keys = _keyword_set(memories[idx].get("text", ""))
+        for j, memory in enumerate(memories):
+            if j in scored:
+                continue
+            if anchor_keys & _keyword_set(memory.get("text", "")):
+                scored[j] = {"memory": memory,
+                             "score": round(entry["score"] * 0.8, 4),
+                             "via": f"association with {memories[idx].get('id')}"}
+    results = sorted(scored.values(), key=lambda e: (-e["score"], str(e["memory"].get("id"))))
+    return {"memories": results[:top_k], "keywords_used": keywords,
+            "total_memories": len(memories), "found": bool(results)}
+
+
 _OPS = {
     "eq": lambda a, b: normalize(str(a)) == normalize(str(b)),
     "ne": lambda a, b: normalize(str(a)) != normalize(str(b)),

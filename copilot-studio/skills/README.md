@@ -23,6 +23,15 @@ The skills come from one core idea (from our internal guide "Why the agent fails
 | 6 | [Escalate to a human](06-escalate-to-human.md) | The agent bluffs when stuck → clean hand-off with a summary |
 | 7 | [Tone and brand](07-tone-and-brand.md) | Robot voice → one consistent company voice, in Hebrew and English |
 | 8 | [Privacy and safety](08-privacy-and-safety.md) | Leaking personal/insurance data → clear do/don't rules |
+| 9 | [Memory and facts](09-memory-and-facts.md) | Every chat starts from zero → conversations become **clean facts** (ADD/UPDATE/NOOP) |
+| 10 | [Surprisal gate](10-surprisal-gate.md) | Memory drowns in noise → **only new information** gets stored |
+| 11 | [Memory upkeep](11-memory-upkeep.md) | Stale, contradictory memory → periodic "sleep" **compresses episodes into stable facts** |
+| 12 | [Context-aware retrieval](12-context-aware-retrieval.md) | Word-matching only → retrieval weighs the **customer's state** and pulls in **related** memories |
+
+Skills 1–8 come from *"Why the agent fails"*; skills 9–12 come from the companion
+guide *"Architecting AI Memory"* (LLM amnesia → structured memory → brain-inspired
+memory: surprisal gate, affective routing, sleep consolidation, associative
+retrieval).
 
 ## Role packs (paste-ready)
 

@@ -26,6 +26,22 @@ Azure Function App  ──  backend/  (Python; deterministic code + Azure OpenAI
 | Grounded answer | `POST /answer` | 5 | Strong model, sees ONLY the paragraphs |
 | Verify answer consistency | `POST /verify` | 5 | Runs the answer twice, compares |
 | Ask (full pipeline) | `POST /ask` | 1+4+5 | One call for simple flows |
+| Extract memory facts | `POST /memory/extract` | 9+10 | Small model distills facts; **surprisal gate + ADD/UPDATE/NOOP in code** |
+| Consolidate memories | `POST /memory/consolidate` | 11 | Model compresses episodes to stable facts (run on a schedule) |
+| Retrieve memories | `POST /memory/retrieve` | 12 | **No — state-aware scoring + associative expansion in code** |
+
+### How memory storage works
+
+The connector is **stateless by design**: memory actions take the customer's
+current memory list and return the updated one. Your agent stores that list where
+your data already lives — a Dataverse table, a CRM field, or a SharePoint list —
+keyed by customer id. This keeps customer data in your governed store (see
+skill 8) instead of inside the connector. Typical flow:
+
+1. Conversation starts, identity verified → load the customer's memory JSON.
+2. Call **Retrieve memories** (query + customer state) → personalize the answer.
+3. Conversation ends → call **Extract memory facts** → save `updated_memories`.
+4. Nightly Power Automate flow → **Consolidate memories** for active customers.
 
 ## Part A — Deploy the backend (once, by IT / whoever deployed the policy-analysis function)
 
@@ -54,7 +70,7 @@ Azure Function App  ──  backend/  (Python; deterministic code + Azure OpenAI
 3. Security is already defined (API key in header `x-functions-key`) — just click
    through and **Create connector**.
 4. **Test tab** → create a connection using the function key from Part A →
-   run *ListSkills*. You should see the eight skills.
+   run *ListSkills*. You should see the twelve skills.
 
 ## Part C — Use it in Copilot Studio (every agent builder)
 

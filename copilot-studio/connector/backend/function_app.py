@@ -75,6 +75,14 @@ def skills(req: func.HttpRequest) -> func.HttpResponse:
          "rule": "One company voice: confirm, answer, next step."},
         {"id": 8, "name": "Privacy and safety", "action": None,
          "rule": "Verify identity first; minimum necessary data; one customer per chat."},
+        {"id": 9, "name": "Memory and facts", "action": "ExtractMemoryFacts",
+         "rule": "Distill conversations into clean facts (ADD/UPDATE/NOOP) — store facts, never transcripts."},
+        {"id": 10, "name": "Surprisal gate", "action": "ExtractMemoryFacts",
+         "rule": "Store only what's new — expected/known input is rejected at write time."},
+        {"id": 11, "name": "Memory upkeep", "action": "ConsolidateMemories",
+         "rule": "Periodically compress episodes into stable facts; newer facts win contradictions."},
+        {"id": 12, "name": "Context-aware retrieval", "action": "RetrieveMemories",
+         "rule": "Blend text relevance with customer state; related memories join via association."},
     ]})
 
 
@@ -157,6 +165,70 @@ def verify(req: func.HttpRequest) -> func.HttpResponse:
         return _error(str(err), 502)
     return _ok({"consistent": first.strip() == second.strip(),
                 "answer_1": first, "answer_2": second})
+
+
+@app.route(route="memory/extract", methods=["POST"])
+def memory_extract(req: func.HttpRequest) -> func.HttpResponse:
+    """Skills 9+10: conversation -> candidate facts (LLM) -> novelty gate and
+    ADD/UPDATE/NOOP decisions (code) -> updated memory list."""
+    body = _json(req)
+    memories = body.get("memories") or []
+    conversation = body.get("conversation_text", "").strip()
+    candidates = body.get("candidate_facts")  # optional: skip the LLM step
+    if candidates is None:
+        if not conversation:
+            return _error("Body must contain 'conversation_text' (or 'candidate_facts').")
+        try:
+            candidates = llm.extract_facts(conversation, memories)
+        except llm.LLMNotConfigured as err:
+            return _error(str(err), 503)
+        except RuntimeError as err:
+            return _error(str(err), 502)
+    threshold = float(body.get("novelty_threshold", 0.3))
+    operations = pipeline.decide_operations(candidates, memories, threshold)
+    updated = pipeline.apply_operations(memories, operations,
+                                        customer_state=body.get("customer_state"))
+    return _ok({"operations": operations, "updated_memories": updated,
+                "stored": sum(1 for o in operations if o["op"] != "NOOP"),
+                "rejected_by_gate": sum(1 for o in operations if o["op"] == "NOOP")})
+
+
+@app.route(route="memory/consolidate", methods=["POST"])
+def memory_consolidate(req: func.HttpRequest) -> func.HttpResponse:
+    """Skill 11: the sleep daemon — compress episodic memories into stable facts."""
+    body = _json(req)
+    memories = body.get("memories") or []
+    if not memories:
+        return _error("Body must contain 'memories' (non-empty list).")
+    try:
+        consolidated = llm.consolidate_memories(memories)
+    except llm.LLMNotConfigured as err:
+        return _error(str(err), 503)
+    except RuntimeError as err:
+        return _error(str(err), 502)
+    before, after = len(memories), len(consolidated)
+    kept_ids = {m.get("id") for m in consolidated}
+    return _ok({"memories": consolidated, "before": before, "after": after,
+                "compression_ratio": round(before / after, 2) if after else None,
+                "removed_ids": [m.get("id") for m in memories
+                                if m.get("id") not in kept_ids]})
+
+
+@app.route(route="memory/retrieve", methods=["POST"])
+def memory_retrieve(req: func.HttpRequest) -> func.HttpResponse:
+    """Skill 12: state-aware + associative memory retrieval — pure code."""
+    body = _json(req)
+    query = body.get("query", "").strip()
+    memories = body.get("memories") or []
+    if not query or not memories:
+        return _error("Body must contain 'query' and 'memories' (non-empty list).")
+    result = pipeline.memory_retrieve(
+        memories, query,
+        customer_state=body.get("customer_state"),
+        top_k=int(body.get("top_k", 6)),
+        synonyms=body.get("synonyms") or {},
+    )
+    return _ok(result)
 
 
 @app.route(route="ask", methods=["POST"])

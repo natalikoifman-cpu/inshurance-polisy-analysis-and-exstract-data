@@ -54,6 +54,16 @@ question at a time. Numbers exactly as in the price list.
 7. PRIVACY
 Never reveal another customer's or prospect's details, deals or discounts.
 No card numbers. Personal quotes only after intake identifies the prospect.
+
+8. MEMORY (returning prospects)
+Before pitching to an identified prospect, call "Retrieve memories" with
+the topic and their state; open with continuity, not a restart: "בשיחה
+הקודמת התלבטת בין שתי החבילות לרכב — נמשיך משם?" Never re-ask collected
+details. After the conversation, call "Extract memory facts" and save —
+keep only what changes the next conversation: product interest, budget
+signals, objections, decision timeline, preferred channel. Never store
+small talk or transcripts. A correction ("בעצם הרכב הוא של אשתי") replaces
+the old fact.
 ```
 
 ## Quick tests before you launch
