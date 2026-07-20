@@ -1,0 +1,561 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Agent Skills Pipeline",
+    "description": "General-purpose skills for building reliable chat agents (sales, marketing, customer service). Implements the engineered-agent pipeline: intake form check, deterministic routing, smart retrieval (keyword enrichment + BM25), grounded answers, and consistency verification. The model is the last station, not the first.",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Insurance Policy Analysis Team"
+    }
+  },
+  "host": "REPLACE-WITH-YOUR-FUNCTION-APP.azurewebsites.net",
+  "basePath": "/api",
+  "schemes": ["https"],
+  "consumes": ["application/json"],
+  "produces": ["application/json"],
+  "securityDefinitions": {
+    "api_key": {
+      "type": "apiKey",
+      "in": "header",
+      "name": "x-functions-key"
+    }
+  },
+  "security": [{"api_key": []}],
+  "paths": {
+    "/skills": {
+      "get": {
+        "operationId": "ListSkills",
+        "summary": "List agent skills",
+        "x-ms-summary": "List agent skills",
+        "description": "Returns the playbook of the eight agent-building skills and which connector action implements each one. Use to explain to a maker or an agent what capabilities are available.",
+        "responses": {
+          "200": {
+            "description": "The skill playbook",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "skills": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {"type": "integer"},
+                      "name": {"type": "string"},
+                      "action": {"type": "string"},
+                      "rule": {"type": "string"}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/intake/check": {
+      "post": {
+        "operationId": "CheckIntakeForm",
+        "summary": "Check intake form",
+        "x-ms-summary": "Check intake form",
+        "description": "Skill 1: fills the intake form from the conversation and reports whether it is complete. Call this BEFORE answering any customer request. If 'complete' is false, ask the user the returned 'next_question' and call again — never guess a missing field.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "conversation_text": {
+                  "type": "string",
+                  "description": "Everything the user wrote so far in this conversation",
+                  "x-ms-summary": "Conversation text"
+                },
+                "known_fields": {
+                  "type": "object",
+                  "description": "Fields already confirmed in earlier turns, e.g. {\"topic\": \"claim\"}",
+                  "x-ms-summary": "Known fields"
+                },
+                "required_fields": {
+                  "type": "array",
+                  "description": "Optional custom field definitions; defaults to the standard 5-field insurance intake form",
+                  "x-ms-summary": "Required fields",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {"type": "string"},
+                      "question": {"type": "string", "description": "The question to ask when this field is missing"},
+                      "description": {"type": "string"},
+                      "allowed": {"type": "array", "items": {"type": "string"}}
+                    }
+                  }
+                }
+              },
+              "required": ["conversation_text"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Form status",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "complete": {"type": "boolean", "x-ms-summary": "Form complete"},
+                "filled": {"type": "object", "x-ms-summary": "Filled fields"},
+                "missing": {"type": "array", "items": {"type": "string"}, "x-ms-summary": "Missing fields"},
+                "invalid": {"type": "array", "items": {"type": "object"}, "x-ms-summary": "Invalid fields"},
+                "next_question": {"type": "string", "x-ms-summary": "Next question to ask"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/route": {
+      "post": {
+        "operationId": "RouteRequest",
+        "summary": "Route request by rules",
+        "x-ms-summary": "Route request by rules",
+        "description": "Skill 3: deterministic routing. Given the completed intake fields and a list of rules, returns which business flow to follow. The same input always returns the same route — the AI must follow the returned route, never pick a branch itself.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "fields": {
+                  "type": "object",
+                  "description": "The completed intake form, e.g. {\"topic\": \"claim\", \"product\": \"car\"}",
+                  "x-ms-summary": "Intake fields"
+                },
+                "rules": {
+                  "type": "array",
+                  "description": "Ordered rules; first full match wins. Empty 'when' = catch-all. Ops: eq, ne, in, contains, gt, lt",
+                  "x-ms-summary": "Routing rules",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "when": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "field": {"type": "string"},
+                            "op": {"type": "string", "enum": ["eq", "ne", "in", "contains", "gt", "lt"]},
+                            "value": {}
+                          }
+                        }
+                      },
+                      "route": {"type": "string"}
+                    }
+                  }
+                }
+              },
+              "required": ["fields", "rules"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The selected route",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "route": {"type": "string", "x-ms-summary": "Selected route"},
+                "rule_index": {"type": "integer"},
+                "matched_conditions": {"type": "array", "items": {"type": "object"}}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/retrieve": {
+      "post": {
+        "operationId": "RetrieveParagraphs",
+        "summary": "Retrieve relevant paragraphs",
+        "x-ms-summary": "Retrieve relevant paragraphs",
+        "description": "Skill 4: the smart-retrieval funnel. Enriches the question's keywords in code (Hebrew prefixes, plural/singular, synonyms) and runs BM25 ranking to return only the 7-8 most relevant paragraphs from a document. Call this INSTEAD of pasting a whole document to the model. Then answer only from the returned paragraphs.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "question": {"type": "string", "description": "The customer's question", "x-ms-summary": "Question"},
+                "document_text": {"type": "string", "description": "The full text of the document/data to search in", "x-ms-summary": "Document text"},
+                "top_k": {"type": "integer", "default": 8, "description": "How many paragraphs to return (default 8)", "x-ms-summary": "Top K"},
+                "synonyms": {
+                  "type": "object",
+                  "description": "Domain synonyms, e.g. {\"רכב\": [\"אוטו\", \"מכונית\"]}",
+                  "x-ms-summary": "Synonyms"
+                }
+              },
+              "required": ["question", "document_text"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Top relevant paragraphs",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "found": {"type": "boolean", "x-ms-summary": "Anything found"},
+                "total_paragraphs": {"type": "integer"},
+                "keywords_used": {"type": "array", "items": {"type": "string"}},
+                "paragraphs": {
+                  "type": "array",
+                  "x-ms-summary": "Relevant paragraphs",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "index": {"type": "integer"},
+                      "score": {"type": "number"},
+                      "text": {"type": "string"}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/answer": {
+      "post": {
+        "operationId": "GroundedAnswer",
+        "summary": "Grounded answer",
+        "x-ms-summary": "Grounded answer",
+        "description": "Skill 5: answers the question using ONLY the supplied paragraphs (typically the output of RetrieveParagraphs). Refuses to invent facts; says 'not found' when the answer is not in the text. Use this for the final customer-facing answer to any document/data question.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "question": {"type": "string", "x-ms-summary": "Question"},
+                "paragraphs": {"type": "array", "items": {"type": "string"}, "description": "The retrieved paragraphs — the ONLY source the answer may use", "x-ms-summary": "Paragraphs"},
+                "language": {"type": "string", "default": "he", "description": "Answer language: he or en", "x-ms-summary": "Language"},
+                "extra_instructions": {"type": "string", "description": "Optional role-specific instructions (tone, format)", "x-ms-summary": "Extra instructions"}
+              },
+              "required": ["question", "paragraphs"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The grounded answer",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "answer": {"type": "string", "x-ms-summary": "Answer"},
+                "paragraphs_used": {"type": "integer"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/verify": {
+      "post": {
+        "operationId": "VerifyConsistency",
+        "summary": "Verify answer consistency",
+        "x-ms-summary": "Verify answer consistency",
+        "description": "Skill 5 proof: runs the same grounded answer twice and compares. 'consistent' = true means the input is precise and nothing is being guessed. Use when testing an agent or before sending high-stakes answers.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "question": {"type": "string", "x-ms-summary": "Question"},
+                "paragraphs": {"type": "array", "items": {"type": "string"}, "x-ms-summary": "Paragraphs"},
+                "language": {"type": "string", "default": "he", "x-ms-summary": "Language"}
+              },
+              "required": ["question", "paragraphs"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Consistency result",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "consistent": {"type": "boolean", "x-ms-summary": "Consistent"},
+                "answer_1": {"type": "string"},
+                "answer_2": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/memory/surprisal": {
+      "post": {
+        "operationId": "ScoreSurprisal",
+        "summary": "Score surprisal",
+        "x-ms-summary": "Score surprisal",
+        "description": "Skill 10 (the mnemos SurprisalGate): predicts the user's next intent from the conversation history, compares the prediction with what the user actually said, and returns a surprisal score (0-1). keep=false means the message is expected/routine (greetings, confirmations, answers in the expected format) and should not enter memory at all. Call before Extract memory facts to filter at the intake stage.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "conversation_history": {"type": "string", "description": "The conversation BEFORE the latest user message", "x-ms-summary": "Conversation history"},
+                "latest_message": {"type": "string", "description": "What the user actually said", "x-ms-summary": "Latest message"},
+                "threshold": {"type": "number", "default": 0.3, "description": "Surprisal below this is rejected (keep=false)", "x-ms-summary": "Threshold"}
+              },
+              "required": ["latest_message"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The surprisal verdict",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "surprisal": {"type": "number", "x-ms-summary": "Surprisal score"},
+                "keep": {"type": "boolean", "x-ms-summary": "Worth remembering"},
+                "predicted_intent": {"type": "string", "x-ms-summary": "Predicted intent"},
+                "reason": {"type": "string"},
+                "threshold": {"type": "number"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/memory/extract": {
+      "post": {
+        "operationId": "ExtractMemoryFacts",
+        "summary": "Extract memory facts",
+        "x-ms-summary": "Extract memory facts",
+        "description": "Skills 9+10: distills a conversation into SALIENT structured memory facts (text + category + salience, Mem0-style) and passes each through the novelty gate — only genuinely new information is stored (ADD), corrections update the existing memory (UPDATE), known/expected input is rejected (NOOP). Set surprisal_mode to 'llm' to first run the predictive SurprisalGate on the whole message (with conversation_history) and skip memory entirely for expected input. Call at the end of a conversation with an identified customer, then save the returned updated_memories in your store (Dataverse, CRM). Store facts, never transcripts.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "conversation_text": {"type": "string", "description": "The full conversation to distill", "x-ms-summary": "Conversation text"},
+                "memories": {
+                  "type": "array",
+                  "description": "The customer's existing memory facts",
+                  "x-ms-summary": "Existing memories",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {"type": "string"},
+                      "text": {"type": "string"},
+                      "state": {"type": "string", "description": "calm / frustrated / crisis / research"}
+                    }
+                  }
+                },
+                "customer_state": {"type": "string", "description": "The customer's state in this conversation: calm, frustrated, crisis or research — stored on new facts", "x-ms-summary": "Customer state"},
+                "novelty_threshold": {"type": "number", "default": 0.3, "description": "Below this novelty score a fact is rejected (NOOP). Raise for chatty bots, lower for high-stakes flows", "x-ms-summary": "Novelty threshold"},
+                "surprisal_mode": {"type": "string", "enum": ["off", "llm"], "default": "off", "description": "'llm' runs the predictive SurprisalGate on the whole message first — expected input skips memory entirely", "x-ms-summary": "Surprisal mode"},
+                "conversation_history": {"type": "string", "description": "The conversation BEFORE conversation_text — used by the 'llm' surprisal gate for its prediction", "x-ms-summary": "Conversation history"},
+                "min_salience": {"type": "number", "default": 0, "description": "Drop extracted facts below this salience (0-1). Try 0.5 to keep only clearly important facts", "x-ms-summary": "Minimum salience"},
+                "candidate_facts": {"type": "array", "items": {"type": "string"}, "description": "Optional: pre-extracted facts, skips the model step", "x-ms-summary": "Candidate facts"}
+              },
+              "required": ["memories"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Operations and the updated memory list",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "operations": {
+                  "type": "array",
+                  "x-ms-summary": "Operations",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "op": {"type": "string", "description": "ADD / UPDATE / NOOP"},
+                      "fact": {"type": "string"},
+                      "novelty": {"type": "number"},
+                      "category": {"type": "string", "description": "preference / decision / correction / commitment / problem / profile"},
+                      "salience": {"type": "number"},
+                      "target_id": {"type": "string"},
+                      "reason": {"type": "string"}
+                    }
+                  }
+                },
+                "updated_memories": {"type": "array", "items": {"type": "object"}, "x-ms-summary": "Updated memories"},
+                "stored": {"type": "integer", "x-ms-summary": "Facts stored"},
+                "rejected_by_gate": {"type": "integer", "x-ms-summary": "Rejected by surprisal gate"},
+                "gate": {"type": "object", "description": "Present when surprisal_mode='llm': the SurprisalGate verdict for the whole message", "x-ms-summary": "Surprisal gate verdict"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/memory/consolidate": {
+      "post": {
+        "operationId": "ConsolidateMemories",
+        "summary": "Consolidate memories",
+        "x-ms-summary": "Consolidate memories",
+        "description": "Skill 11: the sleep daemon. Compresses a customer's episodic memories into a few stable facts, resolves contradictions (the newer fact wins), and drops noise — memory quality improves over time. Schedule nightly/weekly from a Power Automate recurrence flow over recently active customers.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "memories": {
+                  "type": "array",
+                  "description": "The customer's memory list, in chronological order (earlier first)",
+                  "x-ms-summary": "Memories",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {"type": "string"},
+                      "text": {"type": "string"},
+                      "state": {"type": "string"}
+                    }
+                  }
+                }
+              },
+              "required": ["memories"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The consolidated memory list",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "memories": {"type": "array", "items": {"type": "object"}, "x-ms-summary": "Consolidated memories"},
+                "before": {"type": "integer"},
+                "after": {"type": "integer"},
+                "compression_ratio": {"type": "number", "x-ms-summary": "Compression ratio"},
+                "removed_ids": {"type": "array", "items": {"type": "string"}}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/memory/retrieve": {
+      "post": {
+        "operationId": "RetrieveMemories",
+        "summary": "Retrieve memories",
+        "x-ms-summary": "Retrieve memories",
+        "description": "Skill 12: context-aware memory retrieval. Scores each memory by ~70% text relevance (BM25 with Hebrew-aware keyword enrichment) + ~30% match to the customer's current state (calm/frustrated/crisis/research), then related memories join through associative expansion at a decayed score — all deterministic code. Set rank_mode to 'its' for high-stakes questions: candidates are re-ranked by an Information Theoretic Score — how much each fact reduces uncertainty about the right answer — instead of surface word overlap. Call before answering an identified customer to personalize with the 1-2 most relevant facts.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "query": {"type": "string", "description": "The customer's question or the current topic", "x-ms-summary": "Query"},
+                "memories": {"type": "array", "items": {"type": "object"}, "description": "The customer's memory facts", "x-ms-summary": "Memories"},
+                "customer_state": {"type": "string", "description": "calm / frustrated / crisis / research — judged from the customer's wording", "x-ms-summary": "Customer state"},
+                "top_k": {"type": "integer", "default": 6, "x-ms-summary": "Top K"},
+                "rank_mode": {"type": "string", "enum": ["fast", "its"], "default": "fast", "description": "'fast' = deterministic ranking; 'its' = re-rank by uncertainty reduction (needs the model, use for high-stakes questions)", "x-ms-summary": "Rank mode"},
+                "synonyms": {"type": "object", "x-ms-summary": "Synonyms"}
+              },
+              "required": ["query", "memories"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The most relevant memories",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "found": {"type": "boolean", "x-ms-summary": "Anything found"},
+                "total_memories": {"type": "integer"},
+                "keywords_used": {"type": "array", "items": {"type": "string"}},
+                "memories": {
+                  "type": "array",
+                  "x-ms-summary": "Relevant memories",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "memory": {"type": "object"},
+                      "score": {"type": "number"},
+                      "its_score": {"type": "number", "description": "Present when rank_mode='its': uncertainty-reduction value of this fact"},
+                      "via": {"type": "string", "description": "'match' or 'association with <id>'"}
+                    }
+                  }
+                },
+                "rank_mode_used": {"type": "string", "x-ms-summary": "Rank mode used"},
+                "note": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ask": {
+      "post": {
+        "operationId": "AskPipeline",
+        "summary": "Ask (full pipeline)",
+        "x-ms-summary": "Ask (full pipeline)",
+        "description": "The whole engineered pipeline in one call: optional intake gate, then retrieval funnel, then grounded answer. Returns status 'need_more_info' with the next question, 'not_found', or 'answered'. Simplest way to use the connector from a Copilot Studio agent.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "question": {"type": "string", "x-ms-summary": "Question"},
+                "document_text": {"type": "string", "x-ms-summary": "Document text"},
+                "known_fields": {"type": "object", "x-ms-summary": "Known intake fields"},
+                "required_fields": {"type": "array", "items": {"type": "object"}, "description": "Optional intake gate; omit to skip the intake check", "x-ms-summary": "Required fields"},
+                "top_k": {"type": "integer", "default": 8, "x-ms-summary": "Top K"},
+                "synonyms": {"type": "object", "x-ms-summary": "Synonyms"},
+                "language": {"type": "string", "default": "he", "x-ms-summary": "Language"}
+              },
+              "required": ["question", "document_text"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pipeline result",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": {"type": "string", "description": "answered / need_more_info / not_found", "x-ms-summary": "Status"},
+                "answer": {"type": "string", "x-ms-summary": "Answer"},
+                "intake": {"type": "object", "x-ms-summary": "Intake status"},
+                "retrieval": {"type": "object", "x-ms-summary": "Retrieval details"}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

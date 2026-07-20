@@ -1,0 +1,23 @@
+{
+  "properties": {
+    "connectionParameters": {
+      "api_key": {
+        "type": "securestring",
+        "uiDefinition": {
+          "displayName": "API Key",
+          "description": "The Azure Function key (x-functions-key) of your Agent Skills Function App",
+          "tooltip": "Find it in the Azure portal: Function App > App keys",
+          "constraints": {
+            "tabIndex": 2,
+            "clearText": false,
+            "required": "true"
+          }
+        }
+      }
+    },
+    "iconBrandColor": "#1D4ED8",
+    "capabilities": [],
+    "publisher": "Insurance Policy Analysis Team",
+    "stackOwner": "Insurance Policy Analysis Team"
+  }
+}
