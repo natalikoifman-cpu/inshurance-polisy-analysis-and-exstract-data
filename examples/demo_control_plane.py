@@ -8,6 +8,10 @@ Runs five scenarios through the full lifecycle and prints the meta-verdict:
 3. A request missing parameters (intake question loop until complete).
 4. A prompt-injection attempt (blocked before any gate runs).
 5. A compliance breach mid-run (auto-rollback to the last safe checkpoint).
+6. Skill orchestration: intent routed to a proven skill, an unmatched
+   intent answered with an explicit "no skill" (never forwarded raw to an
+   LLM), an unproven candidate refused, a plan with a free-form model step
+   rejected, and an atomic-skill plan executed with junction QA.
 Plus a stress-test sweep of the whole entrypoint.
 
 Everything is deterministic: fixed clock, fixed run ids, no randomness at
@@ -32,6 +36,12 @@ from qa_control.evaluation import EvidenceItem, SubTask, SufficiencyChecker
 from qa_control.gates import BusinessKPI
 from qa_control.llm_ready import ParamSpec, PromptBundle, WorkflowSpec
 from qa_control.observability import Route
+from qa_control.skills import (
+    FieldSpec,
+    PlanStep,
+    Skill,
+    SkillContract,
+)
 
 
 class DeterministicClock:
@@ -247,6 +257,73 @@ def build_entrypoint(plane: ControlPlane):
 
 
 # ---------------------------------------------------------------------------
+# The skill catalog: one proven composite brick, three atomic bricks,
+# one candidate that has not yet earned production traffic
+# ---------------------------------------------------------------------------
+
+def register_skills(plane: ControlPlane) -> None:
+    def proven(skill: Skill, executions: int, successes: int) -> Skill:
+        skill.stats.executions = executions
+        skill.stats.successes = successes
+        skill.status = "proven"
+        return skill
+
+    plane.skills.register(proven(Skill(
+        name="generate_wealth_report",
+        description="Full client wealth report (composite, battle-tested)",
+        fn=lambda p: {"report": f"wealth report for {p['client']}"},
+        contract=SkillContract(
+            inputs=[FieldSpec("client", "string")],
+            outputs=[FieldSpec("report", "string")]),
+        intent_keywords=["wealth", "report", "client"],
+        granularity="composite"), executions=42_000, successes=41_874))
+
+    plane.skills.register(proven(Skill(
+        name="identify_account",
+        description="Resolve which account the user means",
+        fn=lambda p: {"account_id": "ACC-1001"},
+        contract=SkillContract(
+            inputs=[FieldSpec("request", "string")],
+            outputs=[FieldSpec("account_id", "string")]),
+        intent_keywords=["identify", "account"]), 8_200, 8_150))
+
+    plane.skills.register(proven(Skill(
+        name="fetch_holdings",
+        description="Fetch holdings rows for one account",
+        fn=lambda p: {"holdings": [
+            {"asset": "SPY", "weight": 0.40},
+            {"asset": "TLT", "weight": 0.35},
+            {"asset": "CASH", "weight": 0.25}]},
+        contract=SkillContract(
+            inputs=[FieldSpec("account_id", "string")],
+            outputs=[FieldSpec("holdings", "list")]),
+        intent_keywords=["fetch", "holdings"]), 9_500, 9_460))
+
+    plane.skills.register(proven(Skill(
+        name="verify_match",
+        description="Verify the fetched data matches the user's intent",
+        fn=lambda p: {"verified": True,
+                      "summary": f"verified {len(p['holdings'])} holdings "
+                                 "against the request"},
+        contract=SkillContract(
+            inputs=[FieldSpec("holdings", "list"),
+                    FieldSpec("request", "string")],
+            outputs=[FieldSpec("verified", "boolean"),
+                     FieldSpec("summary", "string")]),
+        intent_keywords=["verify", "match"]), 7_800, 7_790))
+
+    plane.skills.register(Skill(
+        name="fee_comparison",
+        description="Compare fees across funds (new, unproven)",
+        fn=lambda p: {"comparison": "..."},
+        contract=SkillContract(
+            inputs=[FieldSpec("request", "string")],
+            outputs=[FieldSpec("comparison", "string")]),
+        intent_keywords=["compare", "fees", "funds"],
+        status="candidate"))
+
+
+# ---------------------------------------------------------------------------
 # Scenarios
 # ---------------------------------------------------------------------------
 
@@ -300,6 +377,54 @@ def main(out_dir: Path) -> None:
         "run_status": ctx.status.value,
     }
     ctx.tracer.export_jsonl(out_dir / f"trace_{ctx.run_id}.jsonl")
+
+    # 6. skill orchestration — LLM as conductor of proven LEGO bricks only
+    register_skills(plane)
+    routed = plane.route_skill(
+        "generate the quarterly wealth report for my client")
+    unmatched = plane.route_skill("translate this contract to French")
+    plane.route_skill("translate my policy documents to French")
+    plane.route_skill("can you translate the fund prospectus to French")
+    unproven = plane.route_skill("compare the fees across my two funds")
+
+    freeform_plan = [PlanStep("s1", "identify_account",
+                              {"request": "$init.request"}),
+                     PlanStep("s2", "ask_llm_freeform", {})]
+    freeform_findings = plane.skill_composer.validate_plan(
+        freeform_plan, {"request": "string"})
+
+    decision = plane.preflight(
+        "Segment the portfolio of my main account by asset class, "
+        "balanced profile, horizon of 5 years", make_bundles())
+    ctx = plane.start_run(decision.workflow, decision.params)
+    plan = [
+        PlanStep("s1", "identify_account", {"request": "$init.request"}),
+        PlanStep("s2", "fetch_holdings", {"account_id": "$s1.account_id"}),
+        PlanStep("s3", "verify_match", {"holdings": "$s2.holdings",
+                                        "request": "$init.request"}),
+    ]
+    plan_result, plan_findings = plane.execute_plan(
+        ctx, plan, {"request": "holdings of my main account"})
+    plane.postflight(ctx, iteration_texts=[plan_result["summary"]] * 2,
+                     final_answer=plan_result["summary"] +
+                     " This is for informational purposes only.")
+
+    scenarios["skill_orchestration"] = {
+        "proven_skill_routed": {"action": routed.action,
+                                "skill": routed.skill.name},
+        "no_skill_no_passthrough": {"action": unmatched.action,
+                                    "message": unmatched.message},
+        "unproven_candidate_refused": {"action": unproven.action,
+                                       "message": unproven.message},
+        "freeform_llm_step_rejected": [f.to_dict()
+                                       for f in freeform_findings],
+        "atomic_plan": {"result": plan_result,
+                        "junction_findings": len(plan_findings)},
+        "mined_skill_proposals": [
+            {"name": p.suggested_name, "keyword": p.anchor_keyword,
+             "occurrences": p.occurrences}
+            for p in plane.skill_miner.propose()],
+    }
 
     # stress sweep over the whole entrypoint
     stress = StressTester(entrypoint).run(default_stress_cases(
