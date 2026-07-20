@@ -117,6 +117,14 @@ class TestSufficiency:
         assert any(f.check == "sufficiency.unsupported_numbers" and
                    f.severity is Severity.CRITICAL for f in findings)
 
+    def test_sentence_period_not_part_of_number(self):
+        # regression: "cash 25." must extract 25, not "25."
+        checker = SufficiencyChecker(min_items=1)
+        evidence = [EvidenceItem("doc", "cash allocation 25 percent")]
+        _, findings = checker.check("we hold cash 25.", evidence)
+        assert not any(f.check == "sufficiency.unsupported_numbers"
+                       for f in findings)
+
     def test_uncovered_topic_flagged(self):
         checker = SufficiencyChecker(min_items=1, required_topics=["liquidity"])
         evidence = [EvidenceItem("doc", "equity share is 60")]

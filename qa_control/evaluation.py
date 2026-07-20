@@ -125,7 +125,7 @@ class DecompositionMonitor:
 # Consistency, variance and drift
 # ---------------------------------------------------------------------------
 
-_TOKEN_RE = re.compile(r"[a-zA-Z֐-׿]{2,}|\d+\.?\d*")
+_TOKEN_RE = re.compile(r"[a-zA-Z֐-׿]{2,}|\d+(?:\.\d+)?")
 
 
 def _tokens(text: str) -> Counter:
@@ -276,8 +276,8 @@ class SufficiencyChecker:
                     f"no evidence covers required topic '{topic}'"))
 
         # every numeric claim in the answer must appear in the evidence
-        answer_numbers = set(re.findall(r"\d+\.?\d*", answer))
-        evidence_numbers = set(re.findall(r"\d+\.?\d*", corpus))
+        answer_numbers = set(re.findall(r"\d+(?:\.\d+)?", answer))
+        evidence_numbers = set(re.findall(r"\d+(?:\.\d+)?", corpus))
         unsupported = sorted(answer_numbers - evidence_numbers)
         checks += 1
         if not unsupported:
