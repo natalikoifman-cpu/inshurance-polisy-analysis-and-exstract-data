@@ -94,26 +94,115 @@ def _parse_json_list(raw: str) -> list:
         return []
 
 
-def extract_facts(conversation_text: str, existing_memories: list[dict]) -> list[str]:
-    """Small-model job: distill a conversation into candidate memory FACTS.
-    The novelty gate (code, not LLM) decides afterwards what actually gets stored."""
+def _parse_json_obj(raw: str) -> dict:
+    raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def extract_facts(conversation_text: str, existing_memories: list[dict]) -> list[dict]:
+    """Small-model job (Mem0-style salient extraction): distill a conversation
+    into STRUCTURED candidate facts — {text, category, salience} — leaving the
+    unstructured noise behind. The novelty gate (code, not LLM) decides
+    afterwards what actually gets stored."""
     known = "\n".join(f"- {m.get('text', '')}" for m in existing_memories) or "- (none)"
     system = (
-        "You distill a customer conversation into short, clean memory facts.\n"
+        "You distill a customer conversation into short, clean, SALIENT memory facts.\n"
         "A fact is worth keeping ONLY if it would change how a colleague handles the\n"
         "NEXT conversation: preferences, decisions, corrections, commitments, open\n"
         "problems, life/policy changes.\n"
         "NEVER output: greetings, small talk, politeness, one-off conversation\n"
         "mechanics, or facts already in the known list below.\n"
-        "Each fact: one short sentence, in the customer's language, self-contained.\n"
-        "CORRECT: \"מעדיף תקשורת במייל ולא בטלפון\"\n"
-        "INCORRECT: \"הלקוח אמר תודה ושיהיה יום טוב\" (small talk — never store)\n"
+        "For each fact output:\n"
+        '- "text": one short self-contained sentence, in the customer\'s language.\n'
+        '- "category": one of preference / decision / correction / commitment /\n'
+        "  problem / profile.\n"
+        '- "salience": 0.0-1.0 — how much this matters for future conversations\n'
+        "  (a policy decision ~0.9; a mild preference ~0.6; a passing detail ~0.3).\n"
+        'CORRECT: {"text": "מעדיף תקשורת במייל ולא בטלפון", "category": "preference", "salience": 0.7}\n'
+        'INCORRECT: {"text": "הלקוח אמר תודה ושיהיה יום טוב", ...} (small talk — never output)\n'
         "Already known facts:\n" + known + "\n"
-        'Output ONLY a JSON array of strings, e.g. ["fact one", "fact two"].\n'
-        "If nothing is worth keeping, output []."
+        "Output ONLY a JSON array of these objects. If nothing is worth keeping, output []."
     )
-    return [str(f).strip() for f in _parse_json_list(chat(system, conversation_text,
-            temperature=0.0, max_tokens=600)) if str(f).strip()]
+    facts = []
+    for item in _parse_json_list(chat(system, conversation_text, temperature=0.0, max_tokens=800)):
+        if isinstance(item, str) and item.strip():
+            facts.append({"text": item.strip(), "category": "profile", "salience": 0.5})
+        elif isinstance(item, dict) and str(item.get("text", "")).strip():
+            try:
+                salience = min(1.0, max(0.0, float(item.get("salience", 0.5))))
+            except (TypeError, ValueError):
+                salience = 0.5
+            facts.append({"text": str(item["text"]).strip(),
+                          "category": str(item.get("category", "profile")),
+                          "salience": salience})
+    return facts
+
+
+def score_surprisal(conversation_history: str, latest_message: str) -> dict:
+    """mnemos SurprisalGate: predict the user's next intent from the history,
+    compare the prediction with what the user ACTUALLY said, and return a
+    surprisal score — only surprising input deserves memory."""
+    system = (
+        "You are the surprisal gate of an agent's memory (predictive coding).\n"
+        "Step 1: from the conversation history ALONE, predict the user's most\n"
+        "likely next message or intent.\n"
+        "Step 2: compare your prediction with what the user actually said.\n"
+        "Step 3: output a surprisal score between 0.0 and 1.0:\n"
+        "- 0.0-0.2 fully expected: greetings, thanks, confirmations, an answer in\n"
+        "  the expected format to a question the agent just asked.\n"
+        "- 0.3-0.6 partly new: a detail or preference not predictable from the\n"
+        "  history.\n"
+        "- 0.7-1.0 genuinely surprising: a change of plan, a correction of a known\n"
+        "  fact, a new problem, an unexpected request.\n"
+        'CORRECT: history asks "מה מספר הפוליסה?" and the user answers with a\n'
+        'number -> surprisal ~0.1 (expected). The user instead says "בעצם אני רוצה\n'
+        'לבטל את הפוליסה" -> surprisal ~0.9.\n'
+        'Output ONLY JSON: {"predicted_intent": "...", "surprisal": 0.0, "reason": "..."}'
+    )
+    user = (f"Conversation history:\n{conversation_history or '(empty)'}\n\n"
+            f"User's actual latest message:\n{latest_message}")
+    result = _parse_json_obj(chat(system, user, temperature=0.0, max_tokens=300))
+    try:
+        surprisal = min(1.0, max(0.0, float(result.get("surprisal"))))
+    except (TypeError, ValueError):
+        surprisal = 0.5  # unparseable -> uncertain -> lean toward keeping
+    return {"predicted_intent": str(result.get("predicted_intent", "")),
+            "surprisal": surprisal,
+            "reason": str(result.get("reason", ""))}
+
+
+def its_rerank(query: str, candidates: list[dict]) -> dict:
+    """Memanto-style ITS (Information Theoretic Score): rate each candidate
+    memory by how much it REDUCES UNCERTAINTY about answering the query —
+    not by surface word similarity. Returns {memory_id: its_score}."""
+    listing = json.dumps([{"id": c.get("id"), "text": c.get("text")}
+                          for c in candidates], ensure_ascii=False)
+    system = (
+        "You rank an agent's memories by INFORMATION VALUE for the current query.\n"
+        "For each memory, score 0.0-1.0: how much does knowing this fact reduce\n"
+        "the uncertainty about the right way to answer/act on the query?\n"
+        "- A fact that changes the answer or the required action: 0.8-1.0.\n"
+        "- A fact that adds useful context but does not change the action: 0.4-0.7.\n"
+        "- A fact that merely shares words with the query without informing the\n"
+        "  decision: 0.0-0.3 — word overlap alone is worth nothing.\n"
+        'CORRECT: query "להוסיף נהג צעיר לפוליסה" + memory "לרכב יש כיסוי צד ג\'\n'
+        'בלבד" -> high (changes what can be offered). Memory "שאל בעבר שאלה על\n'
+        'נהגים" -> low (similar words, no decision value).\n'
+        'Output ONLY JSON: [{"id": "...", "its": 0.0}, ...] — one entry per memory.'
+    )
+    user = f"Query: {query}\n\nMemories:\n{listing}"
+    scores = {}
+    for item in _parse_json_list(chat(system, user, temperature=0.0, max_tokens=600)):
+        if isinstance(item, dict) and item.get("id") is not None:
+            try:
+                scores[str(item["id"])] = min(1.0, max(0.0, float(item.get("its"))))
+            except (TypeError, ValueError):
+                continue
+    return scores
 
 
 def consolidate_memories(memories: list[dict]) -> list[dict]:

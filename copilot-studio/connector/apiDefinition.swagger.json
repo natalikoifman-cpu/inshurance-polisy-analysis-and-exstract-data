@@ -301,12 +301,51 @@
         }
       }
     },
+    "/memory/surprisal": {
+      "post": {
+        "operationId": "ScoreSurprisal",
+        "summary": "Score surprisal",
+        "x-ms-summary": "Score surprisal",
+        "description": "Skill 10 (the mnemos SurprisalGate): predicts the user's next intent from the conversation history, compares the prediction with what the user actually said, and returns a surprisal score (0-1). keep=false means the message is expected/routine (greetings, confirmations, answers in the expected format) and should not enter memory at all. Call before Extract memory facts to filter at the intake stage.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "conversation_history": {"type": "string", "description": "The conversation BEFORE the latest user message", "x-ms-summary": "Conversation history"},
+                "latest_message": {"type": "string", "description": "What the user actually said", "x-ms-summary": "Latest message"},
+                "threshold": {"type": "number", "default": 0.3, "description": "Surprisal below this is rejected (keep=false)", "x-ms-summary": "Threshold"}
+              },
+              "required": ["latest_message"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The surprisal verdict",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "surprisal": {"type": "number", "x-ms-summary": "Surprisal score"},
+                "keep": {"type": "boolean", "x-ms-summary": "Worth remembering"},
+                "predicted_intent": {"type": "string", "x-ms-summary": "Predicted intent"},
+                "reason": {"type": "string"},
+                "threshold": {"type": "number"}
+              }
+            }
+          }
+        }
+      }
+    },
     "/memory/extract": {
       "post": {
         "operationId": "ExtractMemoryFacts",
         "summary": "Extract memory facts",
         "x-ms-summary": "Extract memory facts",
-        "description": "Skills 9+10: distills a conversation into clean memory facts and passes each through the surprisal gate — only genuinely new information is stored (ADD), corrections update the existing memory (UPDATE), known/expected input is rejected (NOOP). Call at the end of a conversation with an identified customer, then save the returned updated_memories in your store (Dataverse, CRM). Store facts, never transcripts.",
+        "description": "Skills 9+10: distills a conversation into SALIENT structured memory facts (text + category + salience, Mem0-style) and passes each through the novelty gate — only genuinely new information is stored (ADD), corrections update the existing memory (UPDATE), known/expected input is rejected (NOOP). Set surprisal_mode to 'llm' to first run the predictive SurprisalGate on the whole message (with conversation_history) and skip memory entirely for expected input. Call at the end of a conversation with an identified customer, then save the returned updated_memories in your store (Dataverse, CRM). Store facts, never transcripts.",
         "parameters": [
           {
             "name": "body",
@@ -331,6 +370,9 @@
                 },
                 "customer_state": {"type": "string", "description": "The customer's state in this conversation: calm, frustrated, crisis or research — stored on new facts", "x-ms-summary": "Customer state"},
                 "novelty_threshold": {"type": "number", "default": 0.3, "description": "Below this novelty score a fact is rejected (NOOP). Raise for chatty bots, lower for high-stakes flows", "x-ms-summary": "Novelty threshold"},
+                "surprisal_mode": {"type": "string", "enum": ["off", "llm"], "default": "off", "description": "'llm' runs the predictive SurprisalGate on the whole message first — expected input skips memory entirely", "x-ms-summary": "Surprisal mode"},
+                "conversation_history": {"type": "string", "description": "The conversation BEFORE conversation_text — used by the 'llm' surprisal gate for its prediction", "x-ms-summary": "Conversation history"},
+                "min_salience": {"type": "number", "default": 0, "description": "Drop extracted facts below this salience (0-1). Try 0.5 to keep only clearly important facts", "x-ms-summary": "Minimum salience"},
                 "candidate_facts": {"type": "array", "items": {"type": "string"}, "description": "Optional: pre-extracted facts, skips the model step", "x-ms-summary": "Candidate facts"}
               },
               "required": ["memories"]
@@ -352,6 +394,8 @@
                       "op": {"type": "string", "description": "ADD / UPDATE / NOOP"},
                       "fact": {"type": "string"},
                       "novelty": {"type": "number"},
+                      "category": {"type": "string", "description": "preference / decision / correction / commitment / problem / profile"},
+                      "salience": {"type": "number"},
                       "target_id": {"type": "string"},
                       "reason": {"type": "string"}
                     }
@@ -359,7 +403,8 @@
                 },
                 "updated_memories": {"type": "array", "items": {"type": "object"}, "x-ms-summary": "Updated memories"},
                 "stored": {"type": "integer", "x-ms-summary": "Facts stored"},
-                "rejected_by_gate": {"type": "integer", "x-ms-summary": "Rejected by surprisal gate"}
+                "rejected_by_gate": {"type": "integer", "x-ms-summary": "Rejected by surprisal gate"},
+                "gate": {"type": "object", "description": "Present when surprisal_mode='llm': the SurprisalGate verdict for the whole message", "x-ms-summary": "Surprisal gate verdict"}
               }
             }
           }
@@ -420,7 +465,7 @@
         "operationId": "RetrieveMemories",
         "summary": "Retrieve memories",
         "x-ms-summary": "Retrieve memories",
-        "description": "Skill 12: context-aware memory retrieval, pure deterministic code. Scores each memory by ~70% text relevance (BM25 with Hebrew-aware keyword enrichment) + ~30% match to the customer's current state (calm/frustrated/crisis/research), then related memories join through associative expansion at a decayed score. Call before answering an identified customer to personalize with the 1-2 most relevant facts.",
+        "description": "Skill 12: context-aware memory retrieval. Scores each memory by ~70% text relevance (BM25 with Hebrew-aware keyword enrichment) + ~30% match to the customer's current state (calm/frustrated/crisis/research), then related memories join through associative expansion at a decayed score — all deterministic code. Set rank_mode to 'its' for high-stakes questions: candidates are re-ranked by an Information Theoretic Score — how much each fact reduces uncertainty about the right answer — instead of surface word overlap. Call before answering an identified customer to personalize with the 1-2 most relevant facts.",
         "parameters": [
           {
             "name": "body",
@@ -433,6 +478,7 @@
                 "memories": {"type": "array", "items": {"type": "object"}, "description": "The customer's memory facts", "x-ms-summary": "Memories"},
                 "customer_state": {"type": "string", "description": "calm / frustrated / crisis / research — judged from the customer's wording", "x-ms-summary": "Customer state"},
                 "top_k": {"type": "integer", "default": 6, "x-ms-summary": "Top K"},
+                "rank_mode": {"type": "string", "enum": ["fast", "its"], "default": "fast", "description": "'fast' = deterministic ranking; 'its' = re-rank by uncertainty reduction (needs the model, use for high-stakes questions)", "x-ms-summary": "Rank mode"},
                 "synonyms": {"type": "object", "x-ms-summary": "Synonyms"}
               },
               "required": ["query", "memories"]
@@ -456,10 +502,13 @@
                     "properties": {
                       "memory": {"type": "object"},
                       "score": {"type": "number"},
+                      "its_score": {"type": "number", "description": "Present when rank_mode='its': uncertainty-reduction value of this fact"},
                       "via": {"type": "string", "description": "'match' or 'association with <id>'"}
                     }
                   }
-                }
+                },
+                "rank_mode_used": {"type": "string", "x-ms-summary": "Rank mode used"},
+                "note": {"type": "string"}
               }
             }
           }

@@ -23,11 +23,25 @@ Two additions on top of text relevance (both computed in code):
 Retrieved memories are **mutable**: recalling one is the moment to check it —
 if the customer's answer contradicts it, update it right there (Skill 11).
 
+3. **ITS re-ranking for high-stakes questions (optional).** Word similarity can
+   still fool retrieval: a memory can share every word with the question and inform
+   nothing. The **Information Theoretic Score** (Memanto-style) asks a different
+   question of each candidate: *how much does knowing this fact reduce the
+   uncertainty about the right answer or action?* A fact that changes what you can
+   offer ("לרכב יש כיסוי צד ג' בלבד") outranks a fact that merely shares words
+   ("שאל בעבר שאלה על נהגים"). Use it when the answer has consequences — quotes,
+   claims, cancellations — and keep the fast deterministic mode for everyday chat.
+
 ## With the custom connector
 
 Call **Retrieve memories** (`/memory/retrieve`) with the query, the customer's
 memory list, and optionally `customer_state`. Scoring and association expansion are
 deterministic code — same input, same memories out, provable like everything else.
+
+For high-stakes questions add `rank_mode: "its"`: the deterministic candidates are
+re-ranked by the model's uncertainty-reduction score, and each result carries its
+`its_score` so you can see why it won. If the model isn't configured, the action
+falls back to the fast ranking and says so in `note` — it never fails silently.
 
 ## Paste this block into your agent's Instructions
 

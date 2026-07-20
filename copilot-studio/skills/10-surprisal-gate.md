@@ -17,12 +17,33 @@ what we already know crosses the gate and is written to memory.
 
 In the deck's measurements this cut memory noise by ~40% at write time.
 
-## With the custom connector
+## With the custom connector — two gates, use one or both
 
-This is built into **Extract memory facts** (`/memory/extract`): each candidate fact
-gets a `novelty` score (0–1) computed in code against the existing memories.
-Below the threshold (default 0.3) → NOOP. You can tune `novelty_threshold`
-per agent: raise it for chatty consumer bots, lower it for high-stakes flows.
+**Gate A — novelty against memory (fast, no model).** Built into **Extract memory
+facts** (`/memory/extract`): each candidate fact gets a `novelty` score (0–1)
+computed in code against the existing memories. Below the threshold (default 0.3)
+→ NOOP. Tune `novelty_threshold` per agent: raise it for chatty consumer bots,
+lower it for high-stakes flows.
+
+**Gate B — predictive surprisal (the mnemos SurprisalGate).** The **Score
+surprisal** action (`/memory/surprisal`) uses a language model the way the brain
+uses predictive coding: it **predicts the user's next intent** from the
+conversation history, compares the prediction with what the user *actually* said,
+and returns a `surprisal` score:
+
+- The agent asked "מה מספר הפוליסה?" and got a number → surprisal ≈ 0.1 → skip.
+- Instead the customer said "בעצם אני רוצה לבטל את הפוליסה" → surprisal ≈ 0.9 → remember.
+
+Call it before extraction (`keep=false` → don't even extract), or set
+`surprisal_mode: "llm"` on **Extract memory facts** with `conversation_history`
+and the gate runs automatically — expected messages skip memory entirely, and the
+response's `gate` object shows the predicted intent and reason, so you can audit
+every rejection.
+
+Gate B catches what Gate A can't: input that is *routine given the conversation*
+even though it never appeared in memory before. Gate A catches repeats across
+conversations. Together they implement "filter at the intake stage" — the model
+sorts the content before storage instead of passively recording everything.
 
 ## Paste this block into your agent's Instructions
 

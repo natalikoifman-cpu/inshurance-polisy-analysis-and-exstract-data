@@ -27,8 +27,22 @@ list of clean, structured facts**.
 ## With the custom connector
 
 Call **Extract memory facts** (`/memory/extract`) with the conversation text and the
-customer's existing memories. It returns the operations list (ADD/UPDATE/DELETE/NOOP,
-each with a reason) and the updated memory list — store it wherever your agent keeps
+customer's existing memories. A small, cheap model (Mem0-style salient extraction —
+this is exactly the job models like gpt-4o-mini are right-sized for) pulls the
+**structured, salient** information out of the free text and leaves the
+unstructured noise behind. Each fact comes back as:
+
+```json
+{"text": "מעדיף תקשורת במייל ולא בטלפון", "category": "preference", "salience": 0.7}
+```
+
+- `category` — preference / decision / correction / commitment / problem / profile,
+  so downstream flows can treat a commitment differently from a mild preference.
+- `salience` — 0–1, how much this matters for future conversations. Set
+  `min_salience` (e.g. 0.5) to keep only the clearly important facts.
+
+The response contains the operations list (ADD/UPDATE/NOOP, each with a reason and
+novelty score) and the updated memory list — store it wherever your agent keeps
 state (Dataverse table, SharePoint list, CRM field).
 
 ## Paste this block into your agent's Instructions

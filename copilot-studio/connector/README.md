@@ -26,9 +26,10 @@ Azure Function App  ──  backend/  (Python; deterministic code + Azure OpenAI
 | Grounded answer | `POST /answer` | 5 | Strong model, sees ONLY the paragraphs |
 | Verify answer consistency | `POST /verify` | 5 | Runs the answer twice, compares |
 | Ask (full pipeline) | `POST /ask` | 1+4+5 | One call for simple flows |
-| Extract memory facts | `POST /memory/extract` | 9+10 | Small model distills facts; **surprisal gate + ADD/UPDATE/NOOP in code** |
+| Score surprisal | `POST /memory/surprisal` | 10 | Model predicts the next intent vs. what was said — expected input skips memory |
+| Extract memory facts | `POST /memory/extract` | 9+10 | Small model distills salient structured facts (category + salience); **novelty gate + ADD/UPDATE/NOOP in code** |
 | Consolidate memories | `POST /memory/consolidate` | 11 | Model compresses episodes to stable facts (run on a schedule) |
-| Retrieve memories | `POST /memory/retrieve` | 12 | **No — state-aware scoring + associative expansion in code** |
+| Retrieve memories | `POST /memory/retrieve` | 12 | **No — state-aware scoring + associative expansion in code**; optional `rank_mode: its` re-ranks by uncertainty reduction |
 
 ### How memory storage works
 

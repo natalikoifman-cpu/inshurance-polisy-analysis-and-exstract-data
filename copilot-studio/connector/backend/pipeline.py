@@ -216,27 +216,35 @@ def novelty(fact_text: str, memories: list[dict]) -> tuple[float, int]:
     return round(1.0 - best_sim, 4), best_idx
 
 
-def decide_operations(candidate_facts: list[str], memories: list[dict],
+def decide_operations(candidate_facts: list, memories: list[dict],
                       threshold: float = 0.3) -> list[dict]:
     """ADD / UPDATE / NOOP per candidate fact, by novelty against the store.
     novelty < threshold -> NOOP (already known); threshold..0.7 -> UPDATE the
-    most similar memory; >= 0.7 -> ADD. DELETE happens in consolidation."""
+    most similar memory; >= 0.7 -> ADD. DELETE happens in consolidation.
+    A fact may be a plain string or a structured {text, category, salience}
+    object — extra fields are carried through onto the operation."""
     operations = []
     for fact in candidate_facts:
-        fact = str(fact or "").strip()
-        if not fact:
-            continue
-        score, similar_idx = novelty(fact, memories)
-        if score < threshold:
-            operations.append({"op": "NOOP", "fact": fact, "novelty": score,
-                               "reason": "already known / below novelty threshold"})
-        elif score < 0.7 and similar_idx >= 0:
-            operations.append({"op": "UPDATE", "fact": fact, "novelty": score,
-                               "target_id": memories[similar_idx].get("id"),
-                               "reason": "extends or corrects an existing memory"})
+        if isinstance(fact, dict):
+            text = str(fact.get("text", "") or "").strip()
+            extra = {k: fact[k] for k in ("category", "salience") if k in fact}
         else:
-            operations.append({"op": "ADD", "fact": fact, "novelty": score,
-                               "reason": "new information"})
+            text, extra = str(fact or "").strip(), {}
+        if not text:
+            continue
+        score, similar_idx = novelty(text, memories)
+        if score < threshold:
+            operations.append({"op": "NOOP", "fact": text, "novelty": score,
+                               "reason": "already known / below novelty threshold",
+                               **extra})
+        elif score < 0.7 and similar_idx >= 0:
+            operations.append({"op": "UPDATE", "fact": text, "novelty": score,
+                               "target_id": memories[similar_idx].get("id"),
+                               "reason": "extends or corrects an existing memory",
+                               **extra})
+        else:
+            operations.append({"op": "ADD", "fact": text, "novelty": score,
+                               "reason": "new information", **extra})
     return operations
 
 
@@ -251,6 +259,7 @@ def apply_operations(memories: list[dict], operations: list[dict],
     for op in operations:
         if op["op"] == "ADD":
             entry = {"id": f"m{next_num}", "text": op["fact"]}
+            entry.update({k: op[k] for k in ("category", "salience") if k in op})
             if customer_state:
                 entry["state"] = customer_state
             updated.append(entry)
@@ -258,6 +267,7 @@ def apply_operations(memories: list[dict], operations: list[dict],
         elif op["op"] == "UPDATE" and op.get("target_id") in by_id:
             target = by_id[op["target_id"]]
             target["text"] = op["fact"]
+            target.update({k: op[k] for k in ("category", "salience") if k in op})
             if customer_state:
                 target["state"] = customer_state
     return updated
