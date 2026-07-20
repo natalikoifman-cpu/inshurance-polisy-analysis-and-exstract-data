@@ -84,6 +84,10 @@ deterministic — two invocations produce byte-identical output.
 | Bug & drift diagnostics | `metrics.py` | `Diagnostics` (error streaks, silent outputs, latency degradation, MTTD) |
 | Revert mechanisms | `rollback.py` | `RollbackManager` (deep-copied safe checkpoints, auto-revert) |
 | Meta-verdict + KPIs | `controller.py` | `ControlPlane.verdict()` |
+| Skill catalog & intent routing (no LLM passthrough) | `skills.py` | `SkillRegistry`, `RouteDecision` |
+| Skill reliability gating (proven/candidate) | `skills.py` | `ReliabilityLedger`, `SkillStats` |
+| Atomic-skill composition with junction QA | `skills.py` | `SkillComposer`, `PlanStep`, `SkillContract` |
+| Learning new skills from interactions | `skills.py` | `SkillMiner`, `SkillProposal` |
 
 ## The meta-verdict
 
@@ -108,6 +112,52 @@ them with configurable weights (`VerdictWeights`). Two mechanisms decide
 - **Resilience**: `resilience.mttd_seconds` (mean time to detect),
   `resilience.rollback_success_rate`, `resilience.stress_score`,
   `security.breach_prevention_rate`.
+
+## Skill orchestration — the LLM is a conductor, never a performer
+
+`skills.py` implements both granularity philosophies of the
+big-LEGO vs. small-LEGO debate, and their shared conclusion: the model only
+*orchestrates* deterministic, proven code components — it never performs the
+substantive action itself.
+
+**Proven composite skills ("big LEGO bricks")**
+
+- A fixed `SkillRegistry` catalog. User intent is matched deterministically
+  to a registered skill; each skill can require its own clarifying questions
+  before executing.
+- **No LLM passthrough, by construction**: `route()` has exactly three
+  outcomes — execute a registered skill, ask clarifying questions, or an
+  explicit *"no registered skill matches; the request was NOT forwarded to a
+  general model"*. There is no code path that hands the raw request to a
+  model.
+- **Trust is earned with evidence**: a skill starts as `candidate` and is
+  only routable in production after `ReliabilityLedger` records
+  `min_executions_for_proven` runs at `min_success_rate` (defaults: 50 runs
+  at 98%). A proven skill whose live success rate degrades below
+  `demote_below_rate` is automatically demoted back to candidate.
+
+**Atomic-skill composition ("small LEGO bricks")**
+
+- Complex tasks are expressed as a `PlanStep` list over small skills, each
+  with a typed `SkillContract` (inputs/outputs).
+- `SkillComposer.validate_plan` is the QA for the connections: a step that
+  references an unregistered skill (i.e., a free-form model action) is a
+  CRITICAL violation; unproven skills, unbound required inputs, missing
+  junction sources and type-mismatched junctions are BLOCKING.
+- At runtime every junction is validated **again** on the real payloads;
+  a contract violation stops the plan and is recorded against the offending
+  skill in the ledger.
+- Example in the demo — "fetch account holdings" decomposed exactly like the
+  find-a-file example: `identify_account → fetch_holdings → verify_match`,
+  each atomic, each independently testable.
+
+**Learning new skills from user interactions**
+
+- Every request that no skill adequately matches feeds `SkillMiner`, which
+  clusters unmet needs deterministically by shared keywords; a recurring
+  cluster becomes a `SkillProposal` (visible in the KPI sheet as
+  `skills.proposals_pending`). Proposals enter the catalog as candidates and
+  must still earn `proven` status through the ledger before serving users.
 
 ## Design rules baked in
 

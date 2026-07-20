@@ -61,6 +61,18 @@ class CompliancePolicy:
 
 
 @dataclass
+class SkillPolicy:
+    """Governs the skill catalog: routing threshold, and the evidence bar a
+    skill must clear before it may serve users (LLM-as-orchestrator-only is
+    structural — there is no passthrough toggle to loosen)."""
+    min_match_score: float = 0.5           # intent->skill routing threshold
+    min_executions_for_proven: int = 50    # runs needed to earn "proven"
+    min_success_rate: float = 0.98         # success bar for promotion
+    demote_below_rate: float = 0.90        # proven skill degrades -> demoted
+    allow_candidate_execution: bool = False
+
+
+@dataclass
 class VerdictWeights:
     """How much each pillar contributes to the meta reliability score."""
     gates: float = 0.20
@@ -78,6 +90,7 @@ class ControlConfig:
     cost: CostThresholds = field(default_factory=CostThresholds)
     security: SecurityPolicy = field(default_factory=SecurityPolicy)
     compliance: CompliancePolicy = field(default_factory=CompliancePolicy)
+    skills: SkillPolicy = field(default_factory=SkillPolicy)
     verdict_weights: VerdictWeights = field(default_factory=VerdictWeights)
     min_reliability_for_controlled: float = 0.75
 
@@ -93,6 +106,7 @@ class ControlConfig:
             cost=CostThresholds(**data.get("cost", {})),
             security=SecurityPolicy(**data.get("security", {})),
             compliance=CompliancePolicy(**data.get("compliance", {})),
+            skills=SkillPolicy(**data.get("skills", {})),
             verdict_weights=VerdictWeights(**data.get("verdict_weights", {})),
             min_reliability_for_controlled=data.get(
                 "min_reliability_for_controlled", 0.75

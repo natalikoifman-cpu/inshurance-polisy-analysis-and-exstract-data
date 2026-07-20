@@ -46,6 +46,14 @@ from .metrics import CostTracker, Diagnostics, KPIRegistry, LatencyTracker
 from .observability import AgentBusMonitor, FeedbackRecord, FeedbackStore, Route, Tracer
 from .rollback import RollbackManager
 from .security import SecurityGuard
+from .skills import (
+    PlanStep,
+    ReliabilityLedger,
+    RouteDecision,
+    SkillComposer,
+    SkillMiner,
+    SkillRegistry,
+)
 
 
 @dataclass
@@ -103,6 +111,11 @@ class ControlPlane:
         self.cost = CostTracker(config.cost)
         self.feedback = FeedbackStore(feedback_path)
         self.kpi_registry = KPIRegistry()
+        self.skills = SkillRegistry(config.skills)
+        self.skill_ledger = ReliabilityLedger(config.skills)
+        self.skill_composer = SkillComposer(self.skills, self.skill_ledger,
+                                            config.skills)
+        self.skill_miner = SkillMiner()
         self._routes = routes
         self._runs: list[RunContext] = []
         self._run_counter = 0
@@ -139,6 +152,41 @@ class ControlPlane:
                                      last.questions, findings)
         return PreflightDecision("block", results, workflow, params, [],
                                  findings)
+
+    # ------------------------------------------------------------------
+    # 1b. Skill routing (no-LLM-passthrough) and plan execution
+    # ------------------------------------------------------------------
+    def route_skill(self, text: str, clarified: bool = False) -> RouteDecision:
+        """Match user intent to a registered, proven skill — or say so.
+
+        Security-screened first; unmatched intents feed the SkillMiner so
+        recurring needs become candidate-skill proposals.
+        """
+        sec = self.security.screen_input(text, source="user")
+        if not sec.allowed:
+            return RouteDecision(
+                action="no_skill", skill=None, score=0.0,
+                message="Request blocked by security screening.")
+        decision = self.skills.route(text, clarified=clarified)
+        # feed the miner on any inadequate match (none at all, or below the
+        # routing threshold) — refusals of matched-but-unproven skills are
+        # not unmet needs, so they don't count
+        if decision.action == "no_skill" and \
+                decision.score < self.config.skills.min_match_score:
+            self.skill_miner.observe(text)
+        return decision
+
+    def execute_plan(self, ctx: RunContext, steps: list[PlanStep],
+                     initial: dict[str, Any]) -> tuple[dict[str, Any], list[Finding]]:
+        """Run an orchestration plan of registered skills with junction QA.
+
+        Plan findings land on the run context, so orchestration violations
+        (e.g. an unregistered free-form step) count toward the verdict."""
+        with ctx.tracer.span("execute_plan", agent="orchestrator",
+                             steps=[s.skill for s in steps]):
+            result, findings = self.skill_composer.execute(steps, initial)
+        ctx.findings.extend(findings)
+        return result, findings
 
     # ------------------------------------------------------------------
     # 2. Instrumented execution
@@ -329,6 +377,10 @@ class ControlPlane:
         reg.merge("cost", self.cost.overall())
         reg.merge("security", self.security.breach_stats())
         reg.merge("compliance", self.compliance.stats())
+        if self.skills.all():
+            reg.merge("skills", self.skill_ledger.stats(self.skills))
+            reg.set("skills.proposals_pending",
+                    len(self.skill_miner.propose()))
 
         mttds = [ctx.diagnostics.mttd_seconds() for ctx in self._runs]
         mttds = [m for m in mttds if m is not None]
