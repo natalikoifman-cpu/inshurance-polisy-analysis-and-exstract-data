@@ -20,6 +20,7 @@ from .discovery import DiscoveryModule
 from .evaluation_lab import EvaluationLab
 from .governance import DELIVERABLES, GovernanceModule
 from .memory import MemoryModule
+from .orchestration import OrchestrationModule
 from .questions import QuestionBank
 from .readiness import ReadinessModule
 
@@ -78,6 +79,7 @@ class BlueprintStudio:
         self.case_library = CaseLibrary()
         self.governance = GovernanceModule()
         self.memory = MemoryModule()
+        self.orchestration = OrchestrationModule()
 
     # -- deliverables (§49) --------------------------------------------
     def deliverables_status(self, use_case: str) -> dict[str, bool]:
@@ -204,6 +206,7 @@ class BlueprintStudio:
             "experiments": len(self.evaluation.experiments()),
             "decisions_logged": len(self.governance.decisions()),
             "memory": self.memory.stats(),
+            "orchestration": self.orchestration.stats(),
             "capabilities": {
                 name: report.to_dict() for name, report in sorted(reports.items())
             },

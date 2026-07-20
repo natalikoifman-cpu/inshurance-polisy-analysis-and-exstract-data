@@ -285,8 +285,80 @@ def main():
           [(r.item.subject, r.its_score) for r in recalled])
     print("memory stats:", json.dumps(studio.memory.stats(), ensure_ascii=False))
 
-    # ---------------------------------------- 11. Go/No-Go + dashboard
-    section("11. Capability Report — Go/No-Go (§49)")
+    # ------------- 11. Skill Orchestration — big vs. small Lego bricks
+    section("11. Skill Orchestration — intent, pipeline QA, gap mining")
+    from blueprint_studio.orchestration import (
+        Granularity, Intent, Skill, SkillContract, SkillPipeline,
+    )
+    reg = studio.orchestration.registry
+    # Vendor 1: one big proven composite skill, direct intent match
+    reg.register(Skill(
+        name="portfolio_summary", description="full portfolio summary",
+        granularity=Granularity.COMPOSITE, domain="portfolio",
+        intents=["portfolio_summary"],
+        contract=SkillContract(inputs={"client_id": "str"},
+                               outputs={"summary": "dict"}),
+        handler=lambda client_id: {"summary": {"client": client_id}},
+        invocations=25_000, successes=24_650,
+    ))
+    intent = Intent(name="portfolio_summary",
+                    required_slots=["client_id"], slots={})
+    print("incomplete intent ->",
+          studio.orchestration.handle_intent(intent, "portfolio").to_dict())
+    intent.slots["client_id"] = "c-42"
+    print("complete intent   ->",
+          studio.orchestration.handle_intent(intent, "portfolio").to_dict())
+    # Vendor 2: find-file decomposed into three atomic skills
+    reg.register(Skill(
+        name="identify_file_type", description="ask user for file details",
+        granularity=Granularity.ATOMIC, domain="files",
+        contract=SkillContract(inputs={"description": "str"},
+                               outputs={"file_type": "str", "keywords": "str"}),
+        handler=lambda description: {"file_type": "docx",
+                                     "keywords": description},
+    ))
+    reg.register(Skill(
+        name="search_files", description="search machine for candidates",
+        granularity=Granularity.ATOMIC, domain="files",
+        contract=SkillContract(inputs={"file_type": "str", "keywords": "str"},
+                               outputs={"candidate": "str"}),
+        handler=lambda file_type, keywords: {
+            "candidate": f"/docs/fees.{file_type}"},
+    ))
+    reg.register(Skill(
+        name="verify_match", description="verify candidate matches intent",
+        granularity=Granularity.ATOMIC, domain="files",
+        contract=SkillContract(inputs={"candidate": "str", "keywords": "str"},
+                               outputs={"verified": "bool", "path": "str"}),
+        handler=lambda candidate, keywords: {"verified": True,
+                                             "path": candidate},
+    ))
+    orchestrator = studio.orchestration.orchestrator(
+        planner=lambda goal, listing: [
+            "identify_file_type", "search_files", "verify_match"],
+    )
+    result = orchestrator.run("find the word file about fees", "files",
+                              {"description": "word file about fees"})
+    print(f"atomic pipeline result: verified={result['verified']} "
+          f"path={result['path']}")
+    bad = SkillPipeline("broken", reg, ["search_files"])
+    issues = bad.validate({"description": "str"})
+    print(f"connection QA on broken pipeline: {len(issues)} issue(s), "
+          f"e.g. {issues[0].problem!r}")
+    # Learning loop: recurring unmet need becomes a skill proposal
+    for i in range(3):
+        studio.orchestration.handle_intent(
+            Intent(name="tax_report"), "portfolio",
+            request_text=f"i need a tax report {i}",
+        )
+    print("skill proposals:",
+          [(p.intent, p.occurrences)
+           for p in studio.orchestration.gap_miner.proposals()])
+    print("orchestration stats:",
+          json.dumps(studio.orchestration.stats(), ensure_ascii=False))
+
+    # ---------------------------------------- 12. Go/No-Go + dashboard
+    section("12. Capability Report — Go/No-Go (§49)")
     report = studio.capability_report(uc)
     print(f"readiness level: {report.readiness_level}")
     print(f"deliverables complete: "

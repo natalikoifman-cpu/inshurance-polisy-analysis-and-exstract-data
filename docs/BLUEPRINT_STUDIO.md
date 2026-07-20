@@ -36,6 +36,7 @@ Package: `blueprint_studio/` · Demo: `python3 examples/demo_blueprint_studio.py
 | 8 | Bottleneck & Blockage Intelligence | `bottleneck.py` | §19-§22, §24 — taxonomy, rules engine, explainable frequency predictor, structured/process similarity |
 | 9 | Governance & Production Monitoring | `governance.py` | §43, §47, §49 — decision log, audit trail, version registry with rollback |
 | 10 | Memory & Salience Intelligence | `memory.py` | SurprisalGate (mnemos), salient extraction with ADD/UPDATE/NOOP (Mem0), Information-Theoretic Score retrieval (Memanto) |
+| 11 | Skill Orchestration | `orchestration.py` | composite vs. atomic skill granularity, intent clarification loop, connection QA, LLM-as-orchestrator-only, skill-gap mining |
 
 `studio.py` ties them together: per-capability deliverables checklist
 (the 20 artifacts of §49), the Go/No-Go verdict, and the §43 dashboard.
@@ -128,6 +129,45 @@ ranks by information value at retrieval:
 `MemoryModule.observe` chains the pipeline (gate → extract → store):
 only turns that pass the gate reach the extractor, and only extracted
 facts reach memory. `recall` runs ITS over the store.
+
+## Skill orchestration (module 11)
+
+Both vendor approaches to skill granularity live side by side, sharing
+one registry, so each use case can choose its brick size:
+
+- **Composite skills — big Lego bricks.** A fixed skill list, direct
+  intent-to-skill matching, and a reliability record per skill
+  (invocations, success rate). `IntentResolver` asks clarifying
+  questions until every required slot of the intent is filled, matches
+  only against *proven* skills (configurable thresholds, e.g. ≥100
+  invocations at ≥95% success), and when nothing fits it says so —
+  `ResolutionOutcome` deliberately has **no pass-through-to-raw-LLM
+  outcome**, so "just forward the question to the LLM" is impossible by
+  construction.
+- **Atomic skills — small Lego bricks.** Tasks decompose into
+  single-purpose skills composed into `SkillPipeline`s (the find-file
+  example: `identify_file_type → search_files → verify_match`). Each
+  atomic skill is testable in isolation; **connection QA**
+  (`pipeline.validate`) proves every joint before execution — each
+  step's declared inputs must be produced, name and type, by an earlier
+  step or the initial payload — and at runtime a step that returns less
+  than its contract promised fails loudly instead of corrupting the
+  next step. Domain-based relevance filtering keeps irrelevant skills
+  (Excel skills for a Word task) out of the planner's context, saving
+  tokens.
+- **The LLM as orchestrator only.** `Orchestrator` hands a pluggable
+  planner (an LLM in production, a deterministic function in tests) the
+  *filtered* skill listing and accepts back only an ordering of
+  registered skill names — a plan naming an unregistered skill is
+  rejected, so the planner conducts but never executes, and every
+  substantive action runs as deterministic code. The registry itself
+  refuses non-deterministic skills and skills without an output
+  contract.
+- **Learning new skills from interactions.** `SkillGapMiner` records
+  every unmatched intent; a need that recurs past the threshold becomes
+  a `SkillProposal` for the backlog — recurring unmet demand surfaces
+  as a candidate skill instead of silently degrading into free-form
+  LLM answers.
 
 ## Go/No-Go
 

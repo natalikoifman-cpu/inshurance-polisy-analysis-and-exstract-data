@@ -4,7 +4,7 @@ AI-powered insurance policy analysis tool that extracts structured data from pol
 ## Financial Agent Blueprint & Data Readiness Studio
 
 `blueprint_studio/` is a control center for turning a financial data
-platform into a trustworthy customer-facing agent — ten modules covering
+platform into a trustworthy customer-facing agent — eleven modules covering
 business discovery, question design, data catalog & lineage, readiness
 scoring with mandatory blockers, a dataset lab (leakage-safe splits,
 expert bootstrapping, golden dataset, active learning), tool architecture
@@ -12,8 +12,10 @@ with code-enforced permissions, an evaluation & optimization lab (hard
 constraints, weighted objective, transaction cost, version acceptance),
 blockage prediction, governance, and memory & salience intelligence
 (surprisal-gated ingestion, Mem0-style salient extraction,
-information-theoretic retrieval ranking) — ending in a per-capability
-Go/No-Go verdict.
+information-theoretic retrieval ranking), and skill orchestration
+(composite vs. atomic skill granularity, connection QA on pipelines,
+LLM-as-orchestrator-only, skill-gap mining) — ending in a
+per-capability Go/No-Go verdict.
 
 - Docs: [docs/BLUEPRINT_STUDIO.md](docs/BLUEPRINT_STUDIO.md)
 - Demo: `python3 examples/demo_blueprint_studio.py`
