@@ -35,6 +35,7 @@ Package: `blueprint_studio/` · Demo: `python3 examples/demo_blueprint_studio.py
 | 7 | Evaluation & Optimization Lab | `evaluation_lab.py` | §8, §9, §37, §39, §41, §46, §47 — grading, objective function, transaction cost, statistics, experiments, acceptance gate |
 | 8 | Bottleneck & Blockage Intelligence | `bottleneck.py` | §19-§22, §24 — taxonomy, rules engine, explainable frequency predictor, structured/process similarity |
 | 9 | Governance & Production Monitoring | `governance.py` | §43, §47, §49 — decision log, audit trail, version registry with rollback |
+| 10 | Memory & Salience Intelligence | `memory.py` | SurprisalGate (mnemos), salient extraction with ADD/UPDATE/NOOP (Mem0), Information-Theoretic Score retrieval (Memanto) |
 
 `studio.py` ties them together: per-capability deliverables checklist
 (the 20 artifacts of §49), the Go/No-Go verdict, and the §43 dashboard.
@@ -89,6 +90,44 @@ and a per-feature explanation, exactly the §21 output shape. Similarity
 combines structured feature overlap with process-path similarity, so a
 bond and a fund blocked for the same root cause ("internal id exists but
 no provider mapping") rank as neighbors (§22).
+
+## Memory & salience (module 10)
+
+Traditional agent memory is a passive recorder — every turn lands in a
+database ("store everything"). `memory.py` filters at ingestion and
+ranks by information value at retrieval:
+
+- **SurprisalGate** (mnemos-style). A predictive model estimates the
+  user's next intent; the actual turn is scored by its surprisal,
+  `-log2 p(actual | context)`. Only turns above the threshold (new,
+  unexpected information — the essential) are stored; predictable,
+  routine turns (the incidental) are filtered out. Corrections,
+  complaints and permission changes are always stored regardless of
+  surprisal. The predictor is pluggable — an LLM in production, a
+  deterministic Laplace-smoothed intent-transition Markov model
+  (`IntentTransitionModel`) in tests — while the threshold and the
+  store/skip decision stay in code. `filter_rate()` is the
+  anti-store-everything KPI, surfaced on the dashboard.
+- **Salient extraction with a converging store** (Mem0-style).
+  `SalientMemoryStore.ingest` extracts only structured salient facts
+  (identifiers, amounts, preferences, constraints) out of free text —
+  raw conversation text is never stored — and merges them through
+  ADD / UPDATE / NOOP operations keyed by subject, so memory converges
+  to one current fact per subject instead of accumulating duplicates.
+  The extractor is a pluggable callable with a rule-based default.
+- **ITS retrieval ranking** (Memanto-style Information-Theoretic
+  Score). `ITSRanker` ranks memory items by how much they *reduce the
+  model's uncertainty* about the current query, not by surface
+  similarity: query terms are weighted by self-information under a
+  background model of the whole memory corpus (rare terms carry more
+  bits), and items are selected greedily by *marginal* gain — so an
+  item covering a rare specific term beats one full of generic
+  overlapping words, and a second item repeating what the first
+  already covered scores zero and drops away.
+
+`MemoryModule.observe` chains the pipeline (gate → extract → store):
+only turns that pass the gate reach the extractor, and only extracted
+facts reach memory. `recall` runs ITS over the store.
 
 ## Go/No-Go
 

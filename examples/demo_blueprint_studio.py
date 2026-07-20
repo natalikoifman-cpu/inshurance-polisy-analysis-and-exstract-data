@@ -259,8 +259,34 @@ def main():
     print(f"active version: {studio.governance.active_version().version} "
           f"(rollback target: {studio.governance.active_version().previous_version})")
 
-    # ---------------------------------------- 10. Go/No-Go + dashboard
-    section("10. Capability Report — Go/No-Go (§49)")
+    # --------------------- 10. Memory & Salience (SurprisalGate / Mem0 / ITS)
+    section("10. Memory & Salience — gate, extract, recall")
+    studio.memory.train_intent_model(
+        [["greeting", "balance_check", "exposure_question"]] * 20
+    )
+    turns = [
+        ("greeting", "balance_check", "מה היתרה שלי?"),
+        ("balance_check", "exposure_question", "מה החשיפה לדולר?"),
+        ("greeting", "preference_statement",
+         "מהיום אני מעדיף לראות את כל הדוחות ב-USD"),
+        ("preference_statement", "constraint_statement",
+         "אסור להציג לי מוצרים ממונפים"),
+    ]
+    for previous, actual, text in turns:
+        decision, applied = studio.memory.observe(
+            previous, actual, text, recorded_at="2026-07-20T10:00:00",
+            use_case=uc,
+        )
+        ops = [op for op, _ in applied] or "-"
+        print(f"  [{'STORE' if decision.stored else 'skip '}] "
+              f"{decision.surprisal_bits:>6.2f} bits  {text!r}  ops={ops}")
+    recalled = studio.memory.recall("באיזה מטבע להציג את הדוח? USD?")
+    print("recall by ITS:",
+          [(r.item.subject, r.its_score) for r in recalled])
+    print("memory stats:", json.dumps(studio.memory.stats(), ensure_ascii=False))
+
+    # ---------------------------------------- 11. Go/No-Go + dashboard
+    section("11. Capability Report — Go/No-Go (§49)")
     report = studio.capability_report(uc)
     print(f"readiness level: {report.readiness_level}")
     print(f"deliverables complete: "

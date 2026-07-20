@@ -19,6 +19,7 @@ from .dataset_lab import DatasetLab
 from .discovery import DiscoveryModule
 from .evaluation_lab import EvaluationLab
 from .governance import DELIVERABLES, GovernanceModule
+from .memory import MemoryModule
 from .questions import QuestionBank
 from .readiness import ReadinessModule
 
@@ -76,6 +77,7 @@ class BlueprintStudio:
         self.blockage_predictor = BlockagePredictor()
         self.case_library = CaseLibrary()
         self.governance = GovernanceModule()
+        self.memory = MemoryModule()
 
     # -- deliverables (§49) --------------------------------------------
     def deliverables_status(self, use_case: str) -> dict[str, bool]:
@@ -201,6 +203,7 @@ class BlueprintStudio:
             "golden_cases": len(self.dataset.golden_dataset()),
             "experiments": len(self.evaluation.experiments()),
             "decisions_logged": len(self.governance.decisions()),
+            "memory": self.memory.stats(),
             "capabilities": {
                 name: report.to_dict() for name, report in sorted(reports.items())
             },
